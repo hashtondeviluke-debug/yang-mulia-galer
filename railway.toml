@@ -2,6 +2,5 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "python main.py"
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
+# Kita paksa Railway mencari main.py di folder root
+startCommand = "python3 main.py"

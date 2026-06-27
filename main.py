@@ -73,12 +73,13 @@ def color_for_change(pct: float) -> discord.Color:
 
 
 TIMEFRAME_MAP = {
-    "1d":  ("1d",  "5m",  mdates.HourLocator(interval=1),   mdates.DateFormatter("%H:%M")),
-    "5d":  ("5d",  "15m", mdates.HourLocator(interval=4),   mdates.DateFormatter("%d/%m %H:%M")),
-    "1mo": ("1mo", "1h",  mdates.DayLocator(interval=3),    mdates.DateFormatter("%d/%m")),
-    "3mo": ("3mo", "1d",  mdates.WeekdayLocator(byweekday=0), mdates.DateFormatter("%d/%m")),
-    "6mo": ("6mo", "1d",  mdates.MonthLocator(),            mdates.DateFormatter("%b")),
-    "1y":  ("1y",  "1d",  mdates.MonthLocator(),            mdates.DateFormatter("%b '%y")),
+    # Format: "timeframe_candle": ("period_tarik_data", "interval_yfinance", x_locator, x_formatter)
+    "5m":  ("5d",  "5m",  mdates.DayLocator(), mdates.DateFormatter("%d/%m")),
+    "15m": ("1mo", "15m", mdates.WeekdayLocator(byweekday=0), mdates.DateFormatter("%d/%m")),
+    "1h":  ("3mo", "1h",  mdates.WeekdayLocator(byweekday=0), mdates.DateFormatter("%d/%m")),
+    "1d":  ("6mo", "1d",  mdates.MonthLocator(), mdates.DateFormatter("%b '%y")),
+    "1wk": ("2y",  "1wk", mdates.MonthLocator(interval=3), mdates.DateFormatter("%b '%y")),
+    "1mo": ("5y",  "1mo", mdates.YearLocator(), mdates.DateFormatter("%Y")),
 }
 
 
@@ -316,25 +317,26 @@ async def price(interaction: discord.Interaction, ticker: str):
 @bot.tree.command(name="chart", description="Generate chart candlestick saham IDX")
 @app_commands.describe(
     ticker="Kode saham IDX, contoh: BBCA",
-    timeframe="Pilih timeframe: 1d | 5d | 1mo | 3mo | 6mo | 1y"
+    timeframe="Ukuran 1 candle: 5m | 15m | 1h | 1d | 1wk | 1mo"
 )
 @app_commands.choices(timeframe=[
-    app_commands.Choice(name="1 Hari",   value="1d"),
-    app_commands.Choice(name="5 Hari",   value="5d"),
-    app_commands.Choice(name="1 Bulan",  value="1mo"),
-    app_commands.Choice(name="3 Bulan",  value="3mo"),
-    app_commands.Choice(name="6 Bulan",  value="6mo"),
-    app_commands.Choice(name="1 Tahun",  value="1y"),
+    app_commands.Choice(name="5 Menit (Intraday)",   value="5m"),
+    app_commands.Choice(name="15 Menit (Intraday)",  value="15m"),
+    app_commands.Choice(name="1 Jam (Intraday)",     value="1h"),
+    app_commands.Choice(name="1 Hari (Daily)",       value="1d"),
+    app_commands.Choice(name="1 Minggu (Weekly)",    value="1wk"),
+    app_commands.Choice(name="1 Bulan (Monthly)",    value="1mo"),
 ])
-async def chart(interaction: discord.Interaction, ticker: str, timeframe: str = "1mo"):
+async def chart(interaction: discord.Interaction, ticker: str, timeframe: str = "1d"):
     await interaction.response.defer()
     t = ticker_idx(ticker)
 
     period, interval, _, _ = TIMEFRAME_MAP[timeframe]
     df = await fetch_stock_data(t, period, interval)
+    
     if df is None or df.empty:
         await interaction.followup.send(
-            f"❌ Data untuk **{t}** tidak tersedia. Coba ticker lain."
+            f"❌ Data untuk **{t}** tidak tersedia. (Catatan: Data intraday Yahoo Finance memiliki batasan historis)."
         )
         return
 
@@ -346,22 +348,24 @@ async def chart(interaction: discord.Interaction, ticker: str, timeframe: str = 
         None, lambda: generate_chart(df, t, timeframe, ma_list)
     )
 
-    # Build caption embed
     close_vals = df["Close"].values.astype(float)
     pct = ((close_vals[-1] - close_vals[0]) / close_vals[0] * 100) if close_vals[0] != 0 else 0
+    
     embed = discord.Embed(
         title=f"📊 Chart {t.replace('.JK','')} [{timeframe}]",
         color=color_for_change(pct)
     )
+    
     if ma_list:
         ma_text = "  |  ".join([f"{m['type']}{m['period']}" for m in ma_list])
-        embed.add_field(name="📐 Moving Averages", value=ma_text, inline=False)
+        embed.add_field(name="📈 Moving Averages", value=ma_text, inline=False)
     else:
         embed.add_field(
             name="💡 Tip", 
             value="Tambah MA dengan `/addma` contoh: `/addma BBCA EMA 21`",
             inline=False
         )
+        
     embed.set_footer(text="IDX Stock Bot · Data via Yahoo Finance")
     embed.set_image(url="attachment://chart.png")
 
@@ -369,19 +373,6 @@ async def chart(interaction: discord.Interaction, ticker: str, timeframe: str = 
         embed=embed,
         file=discord.File(buf, filename="chart.png")
     )
-
-
-@bot.tree.command(name="addma", description="Tambahkan Moving Average ke chart ticker tertentu")
-@app_commands.describe(
-    ticker="Kode saham IDX, contoh: BBCA",
-    ma_type="Tipe MA: SMA / EMA / WMA",
-    period="Periode MA, contoh: 20"
-)
-@app_commands.choices(ma_type=[
-    app_commands.Choice(name="SMA – Simple Moving Average",       value="SMA"),
-    app_commands.Choice(name="EMA – Exponential Moving Average",  value="EMA"),
-    app_commands.Choice(name="WMA – Weighted Moving Average",     value="WMA"),
-])
 async def addma(interaction: discord.Interaction, ticker: str, ma_type: str, period: int):
     if period < 2 or period > 500:
         await interaction.response.send_message(

@@ -125,15 +125,10 @@ async def fetch_info(ticker: str) -> dict | None:
 
 # ── Chart generator ───────────────────────────────────────────────────────────
 
-def generate_chart(df: pd.DataFrame, ticker: str, timeframe: str,
-                   ma_list: list[dict]) -> io.BytesIO:
-
-    _, _, x_locator, x_formatter = TIMEFRAME_MAP[timeframe]
-
-    # ── Layout ──
+def generate_chart(df: pd.DataFrame, ticker: str, timeframe: str, ma_list: list[dict]) -> io.BytesIO:
     fig = plt.figure(figsize=(14, 9), facecolor="#0D1117")
-    ax_price  = fig.add_axes([0.07, 0.32, 0.91, 0.62])   # price panel
-    ax_volume = fig.add_axes([0.07, 0.05, 0.91, 0.22], sharex=ax_price)  # volume panel
+    ax_price  = fig.add_axes([0.07, 0.32, 0.91, 0.62])
+    ax_volume = fig.add_axes([0.07, 0.05, 0.91, 0.22], sharex=ax_price)
 
     for ax in (ax_price, ax_volume):
         ax.set_facecolor("#0D1117")
@@ -144,105 +139,89 @@ def generate_chart(df: pd.DataFrame, ticker: str, timeframe: str,
     ax_price.grid(color="#21262D", linestyle="--", linewidth=0.5, alpha=0.7)
     ax_volume.grid(color="#21262D", linestyle="--", linewidth=0.5, alpha=0.4)
 
-    # ── Candlesticks ──
-    dates  = mdates.date2num(df.index.to_pydatetime())
+    # Menggunakan urutan angka (0, 1, 2...) agar tidak ada gap libur/weekend
+    x_vals = np.arange(len(df))
     opens  = df["Open"].values.astype(float)
     closes = df["Close"].values.astype(float)
     highs  = df["High"].values.astype(float)
     lows   = df["Low"].values.astype(float)
     volumes = df["Volume"].values.astype(float)
 
-    # candle width proportional to data density
-    if len(dates) > 1:
-        w = (dates[1] - dates[0]) * 0.7
-    else:
-        w = 0.0005
+    w = 0.6 # Lebar candle
 
-    for i in range(len(dates)):
+    for i in range(len(x_vals)):
         is_up = closes[i] >= opens[i]
         col   = "#26A641" if is_up else "#F85149"
         body_lo = min(opens[i], closes[i])
         body_hi = max(opens[i], closes[i])
-        # body
+        
+        # Gambar Body Candle
         ax_price.add_patch(Rectangle(
-            (dates[i] - w/2, body_lo), w, body_hi - body_lo,
+            (x_vals[i] - w/2, body_lo), w, body_hi - body_lo,
             color=col, zorder=2
         ))
-        # wick
+        # Gambar Jarum (Wick)
         ax_price.plot(
-            [dates[i], dates[i]], [lows[i], highs[i]],
+            [x_vals[i], x_vals[i]], [lows[i], highs[i]],
             color=col, linewidth=0.8, zorder=1
         )
-        # volume bar
-        vcol = "#26A641" if is_up else "#F85149"
-        ax_volume.bar(dates[i], volumes[i], width=w, color=vcol, alpha=0.7)
+        # Gambar Volume
+        ax_volume.bar(x_vals[i], volumes[i], width=w, color=col, alpha=0.7)
 
-    # ── Moving Averages ──
+    # Menggambar Moving Averages
     close_series = df["Close"].squeeze()
     for idx_ma, ma in enumerate(ma_list):
         ma_values = calculate_ma(close_series, ma["type"], ma["period"])
         color = MA_COLORS[idx_ma % len(MA_COLORS)]
         label = f"{ma['type']}{ma['period']}"
         ax_price.plot(
-            dates, ma_values.values,
+            x_vals, ma_values.values,
             color=color, linewidth=1.4, label=label, zorder=3
         )
 
-    # ── Legend ──
     if ma_list:
-        leg = ax_price.legend(
-            loc="upper left", facecolor="#161B22",
-            edgecolor="#30363D", labelcolor="#C9D1D9",
-            fontsize=8, framealpha=0.9
-        )
+        ax_price.legend(loc="upper left", facecolor="#161B22", edgecolor="#30363D", labelcolor="#C9D1D9", fontsize=8)
 
-    # ── X-axis formatting ──
-    ax_price.xaxis.set_major_locator(x_locator)
-    ax_price.xaxis.set_major_formatter(x_formatter)
-    ax_volume.xaxis.set_major_locator(x_locator)
-    ax_volume.xaxis.set_major_formatter(x_formatter)
-    plt.setp(ax_price.get_xticklabels(), visible=False)
-    plt.setp(ax_volume.get_xticklabels(), rotation=30, ha="right")
+    # Memasang label tanggal yang benar di sumbu X
+    num_ticks = min(6, len(df))
+    if num_ticks > 0:
+        tick_indices = np.linspace(0, len(df) - 1, num_ticks, dtype=int)
+        if timeframe in ["5m", "15m", "1h"]:
+            tick_labels = [df.index[i].strftime("%d/%m %H:%M") for i in tick_indices]
+        elif timeframe == "1d":
+            tick_labels = [df.index[i].strftime("%d %b '%y") for i in tick_indices]
+        else:
+            tick_labels = [df.index[i].strftime("%b '%y") for i in tick_indices]
+            
+        ax_price.set_xticks(tick_indices)
+        ax_price.set_xticklabels([])
+        ax_volume.set_xticks(tick_indices)
+        ax_volume.set_xticklabels(tick_labels, rotation=30, ha="right")
 
-    # ── Price annotation ──
+    # Garis Harga Terakhir
     last_close = closes[-1]
     ax_price.axhline(last_close, color="#8B949E", linewidth=0.8, linestyle=":")
-    ax_price.text(
-        dates[-1], last_close,
-        f"  {last_close:,.0f}",
-        color="#C9D1D9", fontsize=8, va="center"
-    )
+    ax_price.text(x_vals[-1], last_close, f"  {last_close:,.0f}", color="#C9D1D9", fontsize=8, va="center")
 
-    # ── Titles ──
     name = ticker.replace(".JK", "")
     pct  = ((closes[-1] - closes[0]) / closes[0]) * 100 if closes[0] != 0 else 0
     sign = "▲" if pct >= 0 else "▼"
     col_title = "#26A641" if pct >= 0 else "#F85149"
 
-    ax_price.set_title(
-        f"{name}  {sign} {abs(pct):.2f}%   [{timeframe}]",
-        color=col_title, fontsize=13, fontweight="bold", pad=10
-    )
+    ax_price.set_title(f"{name}  {sign} {abs(pct):.2f}%   [{timeframe}]", color=col_title, fontsize=13, fontweight="bold", pad=10)
     ax_price.set_ylabel("Price (IDR)", color="#8B949E", fontsize=8)
     ax_volume.set_ylabel("Volume", color="#8B949E", fontsize=8)
 
-    ax_price.yaxis.set_major_formatter(
-        plt.FuncFormatter(lambda x, _: f"{x:,.0f}")
-    )
-    ax_volume.yaxis.set_major_formatter(
-        plt.FuncFormatter(lambda x, _: fmt_number(x))
-    )
+    ax_price.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    ax_volume.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: fmt_number(x)))
 
     plt.setp(ax_price.get_yticklabels(), color="#C9D1D9")
     plt.setp(ax_volume.get_yticklabels(), color="#8B949E")
 
-    # ── Watermark ──
-    fig.text(0.98, 0.01, "IDX Stock Bot", color="#30363D",
-             fontsize=8, ha="right", va="bottom")
+    fig.text(0.98, 0.01, "IDX Stock Bot", color="#30363D", fontsize=8, ha="right", va="bottom")
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
-                facecolor="#0D1117")
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor="#0D1117")
     plt.close(fig)
     buf.seek(0)
     return buf
